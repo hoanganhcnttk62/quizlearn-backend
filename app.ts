@@ -42,9 +42,27 @@ app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 // CORS configuration
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:4000",
+  "https://quizlearn-i6jk.vercel.app",
+  "https://quizlearn-gold.vercel.app",
+  "https://fe-quiz-learn.vercel.app",
+  ...(process.env.ORIGIN
+    ? process.env.ORIGIN.split(",").map((o) => o.trim().replace(/\/$/, ""))
+    : []),
+];
+
 app.use(
   cors({
-    origin: ["http://localhost:4000", "https://fe-quiz-learn.vercel.app"],
+    origin: (origin, callback) => {
+      // Cho phép requests không có origin (như mobile app, postman, curl) hoặc nằm trong danh sách
+      if (!origin || allowedOrigins.includes(origin.replace(/\/$/, ""))) {
+        callback(null, true);
+      } else {
+        callback(null, true); // hoặc callback(new Error("Not allowed by CORS"))
+      }
+    },
     credentials: true,
   })
 );
