@@ -25,6 +25,7 @@ const saltRounds = 10;
 import db from "../models/index";
 import { getUserById } from "../services/user.service";
 const User = db.User;
+const Role = db.Role;
 const Image = db.Image;
 
 // console.log("User:", User); // Thêm dòng này để kiểm tra đối tượng User
@@ -239,7 +240,10 @@ export const loginUser = CatchAsyncError(
       );
     }
     // console.log(email, password);
-    const user = await User.findOne({ where: { email } });
+    const user = await User.findOne({
+      where: { email },
+      include: [{ model: Role, as: "role" }],
+    });
     if (!user) {
       return next(new ErrorHandler("User doesn't exists", 400));
     }
@@ -557,7 +561,10 @@ export const socialAuth = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { email, name, avatar, provider } = req.body as ISocialAuthBody;
-      const user = await User.findOne({ where: { email } });
+      const user = await User.findOne({
+      where: { email },
+      include: [{ model: Role, as: "role" }],
+    });
       if (!user) {
         const newUser = await User.create({
           id: uuidv4(),

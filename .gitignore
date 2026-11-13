@@ -11,6 +11,7 @@ yarn.lock
 .env.development
 .env.test
 .env.production
+.env.render
 .env.mssql
 .env.postgres
 .env.pc

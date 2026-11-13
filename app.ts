@@ -27,6 +27,7 @@ import userStatsRouter from "./routes/userStatsRoutes";
 import { ErrorMiddleWare } from "./middleware/error";
 import userStreaksRouter from "./routes/userStreaks";
 import aiRouter from "./routes/aiRoutes";
+import adminRouter from "./routes/adminRoutes";
 
 // Load environment variables
 dotenv.config();
@@ -82,6 +83,7 @@ app.use("/api/v1/user-stats", userStatsRouter);
 app.use("/api/v1/user-streaks", userStreaksRouter);
 app.use("/api/v1/ai", aiRouter);
 app.use("/ai", aiRouter);
+app.use("/api/v1/admin", adminRouter);
 
 // Root route
 app.get("/", (req: Request, res: Response) => {
