@@ -1,29 +1,44 @@
 import { CatchAsyncError } from "../middleware/CatchAsyncError";
 import { Request, Response, NextFunction } from "express";
 import ErrorHandler from "../utils/errorHandler";
-import UserStreak from "../models/userStreak";
+import {
+  getUserStreakStatus,
+  restoreMissedStreak,
+} from "../services/streak.service";
+
 interface CustomRequest extends Request {
-    user?: any;
-  }
+  user?: any;
+}
 
 export const getUserStreak = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = (req as CustomRequest).user?.id;
-
-      const streak = await UserStreak.findAll({
-        where: {
-          userId,
-        },
-      });
+      const data = await getUserStreakStatus(userId);
 
       res.status(200).json({
         success: true,
-        streak,
+        ...data,
       });
-
     } catch (error: any) {
-      return next(new ErrorHandler(error.message, 500));
+      return next(new ErrorHandler(error.message, error.statusCode || 500));
+    }
+  }
+);
+
+export const restoreUserStreak = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = (req as CustomRequest).user?.id;
+      const data = await restoreMissedStreak(userId);
+
+      res.status(200).json({
+        success: true,
+        message: "Khôi phục chuỗi streak thành công!",
+        ...data,
+      });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message, error.statusCode || 500));
     }
   }
 );

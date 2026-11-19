@@ -4,6 +4,7 @@ import ErrorHandler from "../utils/errorHandler";
 import db from "../models/index";
 import { v4 as uuidv4 } from "uuid";
 import { Op } from "sequelize";
+import { recordStudyCompletion } from "../services/streak.service";
 const UserSession = db.UserSession;
 const UserProgress = db.UserProgress;
 const Card = db.Card;
@@ -157,31 +158,10 @@ export const startOrResumeSession = CatchAsyncError(
           },
           { where: { id: user.id } }
         );
-        const existUser = await User.findByPk(user.id);
-        console.log("existUser", existUser);
-        // 2. Get current date (ignore time)
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-
-        // 3. Check if last streak date is before today
-        if (
-          !user.lastStreakDate ||
-          new Date(user.lastStreakDate).setHours(0, 0, 0, 0) < today.getTime()
-        ) {
-          newStreakCount = user.currentStreak + 1;
-          console.log("check", newStreakCount);
-
-          let newLongest = Math.max(user.longestStreak, newStreakCount);
-          await User.update(
-            {
-              currentStreak: newStreakCount,
-              longestStreak: newLongest,
-              lastStreakDate: new Date(),
-            },
-            { where: { id: user.id } }
-          );
-          isNewStreak = true;
-        }
+        // Synchronize & update streak (handles consecutive days, reset on missed days, and UserStreaks table)
+        const streakResult = await recordStudyCompletion(user.id);
+        isNewStreak = streakResult.isNewStreak;
+        newStreakCount = streakResult.newStreakCount;
       }
 
       res.json({
@@ -524,10 +504,15 @@ export const finishTest = CatchAsyncError(async (req, res, next) => {
         });
       }
     }
+    // Update & sync user streak when finishing Test Mode
+    const streakResult = await recordStudyCompletion(userId);
+
     return res.status(200).json({
       success: true,
       message: "Session completed, progress saved",
       sessionHistory: history,
+      isNewStreak: streakResult.isNewStreak,
+      newStreakCount: streakResult.newStreakCount,
     });
   } catch (error: any) {
     return next(new ErrorHandler(error.message, 500));
