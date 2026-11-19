@@ -85,6 +85,7 @@ export const updateFolder = CatchAsyncError(
     try {
       const { id } = req.params;
       const { name, description, statusId, isPublic } = req.body;
+      const currentUser = (req as CustomRequest).user;
 
       const folder = await Folder.findByPk(id);
 
@@ -92,10 +93,20 @@ export const updateFolder = CatchAsyncError(
         return next(new ErrorHandler("Folder not found", 404));
       }
 
-      folder.name = name ?? folder.name;
-      folder.description = description ?? folder.description;
-      folder.isPublic = isPublic ?? folder.isPublic;
-      folder.statusId = statusId ?? folder.statusId;
+      const isAdmin = currentUser?.role?.name?.toLowerCase() === "admin";
+      if (!isAdmin && folder.userId !== currentUser?.id) {
+        return next(new ErrorHandler("You do not have permission to edit this folder", 403));
+      }
+
+      if (name !== undefined) {
+        if (!String(name).trim()) {
+          return next(new ErrorHandler("Folder name cannot be empty", 400));
+        }
+        folder.name = String(name).trim();
+      }
+      if (description !== undefined) folder.description = description;
+      if (typeof isPublic === "boolean") folder.isPublic = isPublic;
+      if (statusId !== undefined) folder.statusId = statusId;
       await folder.save();
 
       res.status(200).json({ success: true, folder });
@@ -110,10 +121,16 @@ export const deleteFolder = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
+      const currentUser = (req as CustomRequest).user;
       const folder = await Folder.findByPk(id);
 
       if (!folder) {
         return next(new ErrorHandler("Folder not found", 404));
+      }
+
+      const isAdmin = currentUser?.role?.name?.toLowerCase() === "admin";
+      if (!isAdmin && folder.userId !== currentUser?.id) {
+        return next(new ErrorHandler("You do not have permission to delete this folder", 403));
       }
 
       await folder.destroy();

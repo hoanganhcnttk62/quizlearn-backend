@@ -114,26 +114,30 @@ export const getSetByUserId = CatchAsyncError(
   }
 );
 
-// Update Folder
+// Update Set
 export const updateSet = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
-      const { title, description, statusId, isPublic, userId, isDraft } =
-        req.body;
+      const { title, description, statusId, isPublic, isDraft } = req.body;
+      const currentUser = (req as CustomRequest).user;
 
       const set = await Set.findByPk(id);
 
       if (!set) {
-        return next(new ErrorHandler("Folder not found", 404));
+        return next(new ErrorHandler("Set not found", 404));
       }
 
-      set.title = title ?? set.title;
-      set.description = description ?? set.description;
-      set.isPublic = isPublic ?? set.isPublic;
-      set.statusId = statusId ?? set.statusId;
-      set.userId = userId ?? set.userId;
-      set.isDraft = isDraft ?? set.isDraft;
+      const isAdmin = currentUser?.role?.name?.toLowerCase() === "admin";
+      if (!isAdmin && set.userId !== currentUser?.id) {
+        return next(new ErrorHandler("You do not have permission to edit this set", 403));
+      }
+
+      if (title !== undefined) set.title = title;
+      if (description !== undefined) set.description = description;
+      if (typeof isPublic === "boolean") set.isPublic = isPublic;
+      if (statusId !== undefined) set.statusId = statusId;
+      if (typeof isDraft === "boolean") set.isDraft = isDraft;
       await set.save();
 
       res.status(200).json({ success: true, set });
