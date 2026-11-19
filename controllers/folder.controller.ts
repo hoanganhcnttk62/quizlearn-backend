@@ -4,6 +4,7 @@ import ErrorHandler from "../utils/errorHandler";
 import db from "../models/index";
 import { v4 as uuidv4 } from 'uuid';
 const Folder = db.Folder;
+const Set = db.Set;
 
 interface CustomRequest extends Request {
   user?: any;
@@ -108,6 +109,14 @@ export const updateFolder = CatchAsyncError(
       if (typeof isPublic === "boolean") folder.isPublic = isPublic;
       if (statusId !== undefined) folder.statusId = statusId;
       await folder.save();
+
+      // Cascade folder visibility change to all sets inside this folder
+      if (typeof isPublic === "boolean") {
+        await Set.update(
+          { isPublic },
+          { where: { folderId: folder.id } }
+        );
+      }
 
       res.status(200).json({ success: true, folder });
     } catch (error: any) {
