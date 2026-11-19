@@ -1,27 +1,45 @@
 import { v4 as uuidv4 } from "uuid";
+import { Transaction } from "sequelize";
+import db from "../models/index";
 import User from "../models/user";
 import UserStreak from "../models/userStreak";
 
 export const RESTORE_STREAK_COST = 50; // 50 XP points to restore 1 missed day
+const STREAK_TIMEZONE = "Asia/Ho_Chi_Minh";
 
-function startOfDay(date: Date): Date {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  return d;
+/**
+ * Format any Date into YYYY-MM-DD in Vietnam timezone (UTC+7),
+ * preventing UTC server clocks (e.g. Render) from shifting 00:00-06:59 VN time to yesterday.
+ */
+function toDateOnlyString(date: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: STREAK_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(date));
 }
 
-function toDateOnlyString(date: Date): string {
-  const d = new Date(date);
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+function dateOnlyToUtcMs(dateOnly: string): number {
+  const [y, m, d] = dateOnly.split("-").map(Number);
+  return Date.UTC(y, m - 1, d);
+}
+
+function addDaysToDateOnly(dateOnly: string, deltaDays: number): string {
+  const ms = dateOnlyToUtcMs(dateOnly) + deltaDays * 24 * 60 * 60 * 1000;
+  const d = new Date(ms);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function diffCalendarDays(earlier: Date, later: Date): number {
   const msPerDay = 24 * 60 * 60 * 1000;
+  const earlierStr = toDateOnlyString(earlier);
+  const laterStr = toDateOnlyString(later);
   return Math.round(
-    (startOfDay(later).getTime() - startOfDay(earlier).getTime()) / msPerDay
+    (dateOnlyToUtcMs(laterStr) - dateOnlyToUtcMs(earlierStr)) / msPerDay
   );
 }
 
@@ -95,7 +113,6 @@ export async function recordStudyCompletion(userId: string) {
 
   // Case 1: Already earned streak today -> keep current streak
   if (user.currentStreak > 0 && diffDays === 0) {
-    // Ensure there is an active UserStreak row in sync
     const activeRow = await UserStreak.findOne({
       where: { userId, isActive: true },
       order: [["startDate", "DESC"]],
@@ -139,12 +156,11 @@ export async function recordStudyCompletion(userId: string) {
         isActive: true,
       });
     } else {
-      const startDate = new Date(today);
-      startDate.setDate(startDate.getDate() - (newStreakCount - 1));
+      const startDateStr = addDaysToDateOnly(todayStr, -(newStreakCount - 1));
       await UserStreak.create({
         id: uuidv4(),
         userId,
-        startDate: toDateOnlyString(startDate) as any,
+        startDate: startDateStr as any,
         endDate: todayStr as any,
         streakLength: newStreakCount,
         isActive: true,
@@ -193,89 +209,98 @@ export async function recordStudyCompletion(userId: string) {
 }
 
 /**
- * Restore a streak using XP points.
+ * Restore a streak using XP points inside a row-locked transaction.
  * Allowed ONLY when user missed exactly 1 day (diffDays === 2).
  * More than 1 missed day (diffDays > 2) is strictly rejected.
  */
 export async function restoreMissedStreak(userId: string) {
-  const user = await User.findByPk(userId);
-  if (!user) {
-    throw { statusCode: 404, message: "Không tìm thấy người dùng." };
-  }
+  await db.sequelize.transaction(async (t: Transaction) => {
+    const user = await User.findByPk(userId, {
+      transaction: t,
+      lock: Transaction.LOCK.UPDATE,
+    });
 
-  if (!user.lastStreakDate || (user.currentStreak || 0) <= 0) {
-    throw { statusCode: 400, message: "Bạn chưa có chuỗi streak nào để khôi phục." };
-  }
+    if (!user) {
+      throw { statusCode: 404, message: "Không tìm thấy người dùng." };
+    }
 
-  const today = new Date();
-  const diffDays = diffCalendarDays(new Date(user.lastStreakDate), today);
+    if (!user.lastStreakDate || (user.currentStreak || 0) <= 0) {
+      throw { statusCode: 400, message: "Bạn chưa có chuỗi streak nào để khôi phục." };
+    }
 
-  if (diffDays <= 1) {
-    throw {
-      statusCode: 400,
-      message: "Chuỗi streak của bạn vẫn đang hoạt động, không cần khôi phục.",
-    };
-  }
+    const today = new Date();
+    const todayStr = toDateOnlyString(today);
+    const diffDays = diffCalendarDays(new Date(user.lastStreakDate), today);
 
-  if (diffDays > 2) {
-    // Permanently close expired streak
-    const closeDate = toDateOnlyString(new Date(user.lastStreakDate));
-    await UserStreak.update(
-      { isActive: false, endDate: closeDate as any },
-      { where: { userId, isActive: true } }
+    if (diffDays <= 1) {
+      throw {
+        statusCode: 400,
+        message: "Chuỗi streak của bạn vẫn đang hoạt động, không cần khôi phục.",
+      };
+    }
+
+    if (diffDays > 2) {
+      const closeDate = toDateOnlyString(new Date(user.lastStreakDate));
+      await UserStreak.update(
+        { isActive: false, endDate: closeDate as any },
+        { where: { userId, isActive: true }, transaction: t }
+      );
+      await User.update({ currentStreak: 0 }, { where: { id: userId }, transaction: t });
+
+      throw {
+        statusCode: 400,
+        message: "Bạn đã bỏ lỡ hơn 1 ngày nên không thể khôi phục chuỗi streak này.",
+      };
+    }
+
+    if ((user.experiencePoints || 0) < RESTORE_STREAK_COST) {
+      throw {
+        statusCode: 400,
+        message: `Bạn cần ít nhất ${RESTORE_STREAK_COST} điểm XP để khôi phục chuỗi streak (hiện có ${user.experiencePoints || 0} XP).`,
+      };
+    }
+
+    const yesterdayStr = addDaysToDateOnly(todayStr, -1);
+    const yesterdayDate = new Date(`${yesterdayStr}T12:00:00+07:00`);
+    const newExp = user.experiencePoints - RESTORE_STREAK_COST;
+
+    await User.update(
+      {
+        experiencePoints: newExp,
+        lastStreakDate: yesterdayDate,
+      },
+      { where: { id: userId }, transaction: t }
     );
-    await User.update({ currentStreak: 0 }, { where: { id: userId } });
 
-    throw {
-      statusCode: 400,
-      message: "Bạn đã bỏ lỡ hơn 1 ngày nên không thể khôi phục chuỗi streak này.",
-    };
-  }
+    const activeRow = await UserStreak.findOne({
+      where: { userId, isActive: true },
+      order: [["startDate", "DESC"]],
+      transaction: t,
+    });
 
-  // Exactly 1 missed day (diffDays === 2) -> check XP points
-  if ((user.experiencePoints || 0) < RESTORE_STREAK_COST) {
-    throw {
-      statusCode: 400,
-      message: `Bạn cần ít nhất ${RESTORE_STREAK_COST} điểm XP để khôi phục chuỗi streak (hiện có ${user.experiencePoints || 0} XP).`,
-    };
-  }
-
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = toDateOnlyString(yesterday);
-
-  const newExp = user.experiencePoints - RESTORE_STREAK_COST;
-
-  await User.update(
-    {
-      experiencePoints: newExp,
-      lastStreakDate: yesterday,
-    },
-    { where: { id: userId } }
-  );
-
-  const activeRow = await UserStreak.findOne({
-    where: { userId, isActive: true },
-    order: [["startDate", "DESC"]],
+    if (activeRow) {
+      await activeRow.update(
+        {
+          endDate: yesterdayStr as any,
+          isActive: true,
+        },
+        { transaction: t }
+      );
+    } else {
+      const startDateStr = addDaysToDateOnly(yesterdayStr, -(user.currentStreak - 1));
+      await UserStreak.create(
+        {
+          id: uuidv4(),
+          userId,
+          startDate: startDateStr as any,
+          endDate: yesterdayStr as any,
+          streakLength: user.currentStreak,
+          isActive: true,
+        },
+        { transaction: t }
+      );
+    }
   });
-
-  if (activeRow) {
-    await activeRow.update({
-      endDate: yesterdayStr as any,
-      isActive: true,
-    });
-  } else {
-    const startDate = new Date(yesterday);
-    startDate.setDate(startDate.getDate() - (user.currentStreak - 1));
-    await UserStreak.create({
-      id: uuidv4(),
-      userId,
-      startDate: toDateOnlyString(startDate) as any,
-      endDate: yesterdayStr as any,
-      streakLength: user.currentStreak,
-      isActive: true,
-    });
-  }
 
   return getUserStreakStatus(userId);
 }

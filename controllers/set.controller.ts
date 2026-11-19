@@ -3,7 +3,10 @@ import { CatchAsyncError } from "../middleware/CatchAsyncError";
 import ErrorHandler from "../utils/errorHandler";
 import db from "../models/index";
 import { v4 as uuidv4 } from "uuid";
+import { Op, fn, col } from "sequelize";
 const Set = db.Set;
+const User = db.User;
+const Card = db.Card;
 const UserSession = db.UserSession;
 const UserProgress = db.UserProgress;
 const Folder = db.Folder;
@@ -193,6 +196,82 @@ export const GetStatOfSet = CatchAsyncError(
       //   message: "restart successfully!",
       //   session,
       // });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message, 500));
+    }
+  }
+);
+
+// Search flashcard sets by title/description (supports finding other users' public sets)
+export const searchSets = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const q = ((req.query.q as string) || "").trim();
+      const scope = (req.query.scope as string) || "all"; // 'all' | 'others' | 'mine'
+      const currentUserId = (req as CustomRequest).user?.id;
+
+      const andConditions: any[] = [{ statusId: { [Op.ne]: 3 } }];
+
+      if (scope === "others" && currentUserId) {
+        andConditions.push({ userId: { [Op.ne]: currentUserId }, isPublic: true });
+      } else if (scope === "mine" && currentUserId) {
+        andConditions.push({ userId: currentUserId });
+      } else {
+        // 'all': public sets from anyone OR current user's own sets
+        andConditions.push(
+          currentUserId
+            ? { [Op.or]: [{ isPublic: true }, { userId: currentUserId }] }
+            : { isPublic: true }
+        );
+      }
+
+      if (q) {
+        andConditions.push({
+          [Op.or]: [
+            { title: { [Op.iLike]: `%${q}%` } },
+            { description: { [Op.iLike]: `%${q}%` } },
+          ],
+        });
+      }
+
+      const sets = await Set.findAll({
+        where: { [Op.and]: andConditions },
+        include: [
+          {
+            model: User,
+            as: "user",
+            attributes: ["id", "username", "avatar"],
+          },
+        ],
+        order: [["createdAt", "DESC"]],
+        limit: 50,
+      });
+
+      // Single grouped query for card counts (avoids N+1 queries)
+      const setIds = sets.map((s: any) => s.id);
+      const countMap: Record<string, number> = {};
+      if (setIds.length > 0) {
+        const counts = await Card.findAll({
+          attributes: ["setId", [fn("COUNT", col("id")), "count"]],
+          where: { setId: { [Op.in]: setIds } },
+          group: ["setId"],
+          raw: true,
+        });
+        counts.forEach((row: any) => {
+          countMap[row.setId] = Number(row.count || 0);
+        });
+      }
+
+      const setsWithCounts = sets.map((s: any) => ({
+        ...s.toJSON(),
+        cardCount: countMap[s.id] || 0,
+      }));
+
+      res.status(200).json({
+        success: true,
+        total: setsWithCounts.length,
+        sets: setsWithCounts,
+      });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 500));
     }
