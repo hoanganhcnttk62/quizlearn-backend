@@ -42,6 +42,8 @@ export interface ProofreadCardItem {
   id: string;
   term: string;
   definition: string;
+  termLang?: SupportedLanguage;
+  defLang?: SupportedLanguage;
 }
 
 export interface ProofreadCardResult {
@@ -175,9 +177,14 @@ Hãy trả về JSON theo định dạng sau (chú ý: feedback viết bằng ti
 
 /**
  * Proofread a batch of cards in a set to find spelling/grammar/mismatch issues
+ * @param cards       - Danh sách thẻ cần kiểm tra
+ * @param termLang    - Ngôn ngữ chung của Term trong study set (mặc định: "auto")
+ * @param defLang     - Ngôn ngữ chung của Definition trong study set (mặc định: "auto")
  */
 export const proofreadCardsWithAI = async (
-  cards: ProofreadCardItem[]
+  cards: ProofreadCardItem[],
+  termLang: SupportedLanguage = "auto",
+  defLang: SupportedLanguage = "auto"
 ): Promise<ProofreadCardResult[]> => {
   if (!cards || cards.length === 0) {
     return [];
@@ -192,6 +199,21 @@ export const proofreadCardsWithAI = async (
     }));
   }
 
+  const termLangLabel = LANGUAGE_LABELS[termLang] ?? termLang;
+  const defLangLabel = LANGUAGE_LABELS[defLang] ?? defLang;
+
+  const isCrossLang = termLang !== "auto" && defLang !== "auto" && termLang !== defLang;
+
+  const languageContext =
+    termLang === "auto" && defLang === "auto"
+      ? `Tự động nhận diện ngôn ngữ của từng thẻ và kiểm tra theo ngôn ngữ tương ứng.`
+      : `Toàn bộ study set được cấu hình: Term bằng **${termLangLabel}**, Definition bằng **${defLangLabel}**.
+${
+  isCrossLang
+    ? `Lưu ý quan trọng: Term (${termLangLabel}) và Definition (${defLangLabel}) cố ý khác ngôn ngữ nhau vì đây là thẻ học từ vựng/dịch nghĩa — ĐÂY LÀ HỢP LỆ, không được coi là mismatch. Chỉ báo mismatch khi hai bên hoàn toàn không liên quan về mặt ngữ nghĩa.`
+    : `Term và Definition cùng ngôn ngữ. Kiểm tra chính tả và sự tương thích nghĩa theo ngôn ngữ ${termLangLabel}.`
+}`;
+
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
@@ -203,23 +225,30 @@ export const proofreadCardsWithAI = async (
 
     const prompt = `
 Bạn là chuyên gia thẩm định và biên tập nội dung flashcard học tập.
-Dưới đây là danh sách các thẻ trong một học phần:
+
+### CẤU HÌNH NGÔN NGỮ CỦA STUDY SET:
+${languageContext}
+
+### DANH SÁCH THẺ CẦN KIỂM TRA:
 ${JSON.stringify(cards, null, 2)}
 
-Hãy rà soát từng thẻ:
-1. Phát hiện lỗi chính tả (spelling typo) ở "term" hoặc "definition".
-2. Phát hiện lỗi ngữ pháp thô hoặc câu tối nghĩa ở "definition".
-3. Kiểm tra xem "term" và "definition" có khớp nhau về ý nghĩa không (mismatch), hay bị dán nhầm nội dung.
+### NHIỆM VỤ - Rà soát từng thẻ theo thứ tự:
+1. **Chính tả Term:** Phát hiện typo, lỗi gõ phím, thiếu/thừa ký tự, sai dấu (đặc biệt tiếng Việt: thanh điệu, dấu phụ) theo ngôn ngữ **${termLangLabel !== "Tự động nhận diện" ? termLangLabel : "được nhận diện tự động"}**.
+   - Chấp nhận: viết tắt chuyên ngành (HTML, CPU...), tên riêng, thuật ngữ kỹ thuật.
+2. **Chính tả & Ngữ pháp Definition:** Kiểm tra theo ngôn ngữ **${defLangLabel !== "Tự động nhận diện" ? defLangLabel : "được nhận diện tự động"}**.
+   - Chấp nhận: định nghĩa ngắn gọn, cụm từ, câu rút gọn (đặc thù flashcard).
+3. **Tính tương thích (Mismatch):** Chỉ báo lỗi khi nội dung Term và Definition hoàn toàn không liên quan về ngữ nghĩa (ví dụ: Term là "Photosynthesis" nhưng Definition lại là "Thủ đô nước Pháp").
 
-Trả về mảng JSON với cấu trúc:
+### ĐỊNH DẠNG KẾT QUẢ:
+Trả về mảng JSON với đúng số phần tử tương ứng danh sách thẻ:
 [
   {
     "cardId": string,
     "hasIssue": boolean,
     "issueType": "typo" | "grammar" | "mismatch" | "none",
-    "suggestedTerm": string, // Thuật ngữ đã được sửa lỗi chính tả nếu có
-    "suggestedDefinition": string, // Định nghĩa đã được hoàn thiện nếu có
-    "feedback": string // Lời giải thích ngắn gọn bằng tiếng Việt (ví dụ: "Sửa 'accomodate' thành 'accommodate'")
+    "suggestedTerm": string,
+    "suggestedDefinition": string,
+    "feedback": string
   }
 ]
 `;
@@ -238,6 +267,30 @@ Trả về mảng JSON với cấu trúc:
   }
 };
 
+// Supported languages for explicit language-aware checking
+export type SupportedLanguage =
+  | "vi"   // Tiếng Việt
+  | "en"   // English
+  | "ja"   // 日本語
+  | "ko"   // 한국어
+  | "zh"   // 中文
+  | "fr"   // Français
+  | "de"   // Deutsch
+  | "es"   // Español
+  | "auto"; // Auto-detect (fallback)
+
+export const LANGUAGE_LABELS: Record<SupportedLanguage, string> = {
+  vi: "Tiếng Việt",
+  en: "English",
+  ja: "日本語",
+  ko: "한국어",
+  zh: "中文",
+  fr: "Français",
+  de: "Deutsch",
+  es: "Español",
+  auto: "Tự động nhận diện",
+};
+
 export interface CheckTermResult {
   hasError: boolean;
   issueType?: "typo" | "grammar" | "mismatch" | "none";
@@ -248,10 +301,16 @@ export interface CheckTermResult {
 
 /**
  * Ultra-fast card checker for real-time / on-blur auto-check (validates Term, Definition & their match)
+ * @param term       - Nội dung thuật ngữ
+ * @param definition - Nội dung định nghĩa
+ * @param termLang   - Ngôn ngữ của Term (mặc định: "auto")
+ * @param defLang    - Ngôn ngữ của Definition (mặc định: "auto")
  */
 export const checkSingleTermWithAI = async (
   term: string,
-  definition?: string
+  definition?: string,
+  termLang: SupportedLanguage = "auto",
+  defLang: SupportedLanguage = "auto"
 ): Promise<CheckTermResult> => {
   const cleanTerm = (term || "").trim();
   const cleanDef = (definition || "").trim();
@@ -266,6 +325,27 @@ export const checkSingleTermWithAI = async (
     return { hasError: false };
   }
 
+  // Build language hint block
+  const termLangLabel = LANGUAGE_LABELS[termLang] ?? termLang;
+  const defLangLabel = LANGUAGE_LABELS[defLang] ?? defLang;
+
+  const termLangInstruction =
+    termLang === "auto"
+      ? `Tự động nhận diện ngôn ngữ của Term và kiểm tra chính tả theo ngôn ngữ đó.`
+      : `Term được viết bằng **${termLangLabel}**. Kiểm tra chính tả và cú pháp CHÍNH XÁC theo chuẩn của ngôn ngữ **${termLangLabel}**.`;
+
+  const defLangInstruction =
+    defLang === "auto"
+      ? `Tự động nhận diện ngôn ngữ của Definition và kiểm tra theo ngôn ngữ đó.`
+      : `Definition được viết bằng **${defLangLabel}**. Kiểm tra chính tả và ngữ pháp theo chuẩn của ngôn ngữ **${defLangLabel}**.`;
+
+  // Build cross-language mismatch instruction
+  const isCrossLang =
+    termLang !== "auto" && defLang !== "auto" && termLang !== defLang;
+  const mismatchInstruction = isCrossLang
+    ? `Term (${termLangLabel}) và Definition (${defLangLabel}) cố ý khác ngôn ngữ nhau vì đây là thẻ học từ vựng/dịch nghĩa — ĐÂY LÀ HỢP LỆ, không được coi là mismatch. Chỉ báo mismatch nếu nội dung hai bên hoàn toàn không liên quan về mặt ngữ nghĩa (ví dụ: Term là "Photosynthesis" nhưng Definition lại là "Thủ đô của nước Pháp").`
+    : `Nếu cả Term và Definition đều có nội dung, kiểm tra xem Definition có thực sự giải thích/dịch nghĩa đúng cho Term không. Chỉ báo mismatch khi hai bên hoàn toàn không liên quan.`;
+
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
@@ -276,24 +356,42 @@ export const checkSingleTermWithAI = async (
     });
 
     const prompt = `
-Bạn là trợ lý kiểm tra nội dung thẻ học tập flashcard.
-Người dùng vừa nhập:
-- Thuật ngữ (Term): "${cleanTerm}"
-- Định nghĩa (Definition): "${cleanDef}"
+Bạn là trợ lý kiểm tra chất lượng nội dung thẻ học tập flashcard.
 
-Nhiệm vụ kiểm tra toàn diện:
-1. "Term": Có bị viết sai chính tả (typo, lỗi gõ phím, thiếu/thừa ký tự) không? (Ví dụ: "Inteligenc" -> "Intelligence", "accomodate" -> "accommodate").
-2. "Definition": Có bị lỗi chính tả hoặc ngữ pháp thô không?
-3. Tính tương thích: Nếu cả Term và Definition đều đã có nội dung, định nghĩa có thực sự diễn giải cho thuật ngữ không hay bị gõ nhầm nội dung khác (mismatch)?
+Dữ liệu đầu vào:
+- Thuật ngữ (Term): """${cleanTerm}"""
+- Định nghĩa (Definition): """${cleanDef || "(chưa nhập)"}"""
 
-Quy tắc phản hồi:
-- Nếu nội dung chuẩn, không có lỗi gì: trả về hasError = false.
-- Nếu có lỗi chính tả, ngữ pháp hoặc lệch nghĩa:
+---
+### NGÔN NGỮ ĐÃ CHỈ ĐỊNH:
+- ${termLangInstruction}
+- ${defLangInstruction}
+
+---
+### QUY TẮC KIỂM TRA:
+
+**1. Chính tả Term (Spelling):**
+- Phát hiện typo, lỗi gõ phím, thiếu/thừa ký tự, sai dấu (đặc biệt với tiếng Việt: sai thanh điệu / dấu phụ) theo đúng ngôn ngữ đã chỉ định.
+- Chấp nhận viết tắt chuyên ngành phổ biến (HTML, CPU, DNA, GDP, v.v.).
+- Chấp nhận tên riêng, thuật ngữ kỹ thuật, danh từ riêng đặc thù.
+
+**2. Chính tả & Ngữ pháp Definition:**
+- Kiểm tra chính tả theo ngôn ngữ đã chỉ định.
+- CHỈ bắt lỗi ngữ pháp khi câu sai hoàn toàn gây hiểu sai nghĩa.
+- CHẤP NHẬN định nghĩa ngắn gọn, cụm từ, câu rút gọn (đặc thù của flashcard).
+
+**3. Tính tương thích (Mismatch):**
+- ${mismatchInstruction}
+
+---
+### QUY TẮC PHẢN HỒI:
+- Nếu nội dung chuẩn (hoặc Definition chưa nhập): hasError = false, issueType = "none", message = "".
+- Nếu phát hiện lỗi:
   - hasError = true
-  - issueType = "typo" | "grammar" | "mismatch"
-  - suggestedTerm: Thuật ngữ chuẩn xác đã sửa lỗi chính tả (nếu Term đúng thì giữ nguyên)
-  - suggestedDefinition: Định nghĩa chuẩn xác đã sửa lỗi nếu có (nếu Definition đúng thì giữ nguyên)
-  - message: Lời giải thích ngắn gọn bằng tiếng Việt (Ví dụ: "Sửa 'Inteligenc' thành 'Intelligence'" hoặc "Định nghĩa chưa khớp với thuật ngữ").
+  - issueType = "typo" (sai chính tả) | "grammar" (sai ngữ pháp thô) | "mismatch" (nội dung không khớp nhau)
+  - suggestedTerm: Term đã sửa đúng (nếu không có lỗi thì giữ nguyên)
+  - suggestedDefinition: Definition đã sửa đúng (nếu không có lỗi hoặc chưa nhập thì giữ nguyên)
+  - message: Giải thích ngắn gọn bằng tiếng Việt (ví dụ: "Sửa 'accomodate' thành 'accommodate'")
 
 Trả về đúng định dạng JSON:
 {
@@ -325,4 +423,5 @@ Trả về đúng định dạng JSON:
     return { hasError: false };
   }
 };
+
 

@@ -6,13 +6,14 @@ import {
   proofreadCardsWithAI,
   checkSingleTermWithAI,
   ProofreadCardItem,
+  SupportedLanguage,
 } from "../services/gemini.service";
 
 // POST /api/v1/ai/check-term
 export const checkTerm = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { term, definition } = req.body;
+      const { term, definition, termLang, defLang } = req.body;
 
       if (!term || typeof term !== "string") {
         return res.status(200).json({
@@ -21,7 +22,12 @@ export const checkTerm = CatchAsyncError(
         });
       }
 
-      const result = await checkSingleTermWithAI(term, definition);
+      const result = await checkSingleTermWithAI(
+        term,
+        definition,
+        (termLang as SupportedLanguage) || "auto",
+        (defLang as SupportedLanguage) || "auto"
+      );
 
       res.status(200).json({
         success: true,
@@ -65,13 +71,21 @@ export const checkAnswer = CatchAsyncError(
 export const proofreadCards = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { cards } = req.body as { cards: ProofreadCardItem[] };
+      const { cards, termLang, defLang } = req.body as {
+        cards: ProofreadCardItem[];
+        termLang?: SupportedLanguage;
+        defLang?: SupportedLanguage;
+      };
 
       if (!cards || !Array.isArray(cards) || cards.length === 0) {
         return next(new ErrorHandler("A non-empty cards array is required", 400));
       }
 
-      const results = await proofreadCardsWithAI(cards);
+      const results = await proofreadCardsWithAI(
+        cards,
+        termLang || "auto",
+        defLang || "auto"
+      );
 
       res.status(200).json({
         success: true,
